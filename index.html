@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Рыцарь — Замок Луны</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#050811}
+*{box-sizing:border-box;-webkit-user-select:none;user-select:none}
+#game{position:fixed;left:0;right:0;top:0;bottom:104px;width:100%;height:calc(100% - 104px);touch-action:none}
+#hud{position:fixed;z-index:3;top:max(8px,env(safe-area-inset-top));left:8px;right:8px;display:none;justify-content:space-between;align-items:center;gap:5px;color:#fff;font:700 14px Arial;text-shadow:0 2px 4px #000}
+.pill{padding:7px 9px;border:1px solid #d7b56699;border-radius:10px;background:#07101ddd}
+#pause{width:44px;height:44px;border-radius:50%;border:2px solid #fff8;background:#101827dd;color:#fff;font-size:19px}
+#controls{position:fixed;z-index:4;left:0;right:0;bottom:0;height:104px;display:none;justify-content:space-between;align-items:center;padding:6px 13px max(6px,env(safe-area-inset-bottom));background:linear-gradient(#07101de8,#050811f5);border-top:1px solid #d7b56655;pointer-events:none}
+.grp{display:flex;gap:9px}
+.btn{pointer-events:auto;width:64px;height:64px;border-radius:50%;border:2px solid #fff7;background:#101827dd;color:#fff;font-size:27px;touch-action:none;box-shadow:0 4px 12px #000a}
+.btn:active{background:#fff4;transform:scale(.95)}
+#menu{position:fixed;z-index:10;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(#050a16bb,#050811dd)}
+.card{width:min(88vw,430px);padding:24px 18px;text-align:center;color:#38240e;background:linear-gradient(#f4dfa9,#bc8644);border:3px solid #6b471f;border-radius:16px;box-shadow:0 12px 40px #000d;font:700 23px Georgia}
+.card small{display:block;margin-top:10px;font:16px Arial;line-height:1.45}
+#start{margin-top:18px;padding:13px 30px;border:0;border-radius:11px;background:#50321c;color:#fff;font:bold 18px Arial;cursor:pointer;touch-action:manipulation}
+#status{position:fixed;z-index:9;left:50%;top:12%;transform:translateX(-50%);display:none;padding:10px 18px;border-radius:12px;background:#101827dd;border:1px solid #d7b56699;color:#fff;font:bold 18px Arial;text-align:center}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud">
+ <div class="pill" id="hp">♥ ♥ ♥</div>
+ <div class="pill">🔑 <span id="key">0/1</span></div>
+ <div class="pill">⭐ <span id="score">0</span></div><div class="pill">🏰 <span id="levelNo">1</span>/50</div>
+ <div class="pill">⏱ <span id="time">00:00</span></div>
+ <button id="pause">Ⅱ</button>
+</div>
+
+<div id="controls">
+ <div class="grp"><button class="btn" id="left">◀</button><button class="btn" id="right">▶</button></div>
+ <div class="grp"><button class="btn" id="crouch">↘</button><button class="btn" id="climb">↕</button><button class="btn" id="attack">⚔</button><button class="btn" id="up">⬆</button></div>
+</div>
+
+<div id="status"></div>
+
+<div id="menu">
+ <div class="card">
+  🏰 ЗАМОК ЛУНЫ
+  <small>Найди ключ, поднимись по настоящим лестницам, избегай шипов и открой ворота.</small>
+  <button id="start" type="button">⚔ НАЧАТЬ ИГРУ</button>
+ </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+let DPR=1, CW=960, CH=540;
+
+const input={left:false,right:false,up:false,down:false,crouch:false};
+let game=null;
+let audio=null;
+let musicTimer=null, musicStep=0;
+
+function resize(){
+  DPR=Math.min(2,window.devicePixelRatio||1);
+  CW=window.innerWidth; CH=Math.max(320,window.innerHeight-104);
+  canvas.width=Math.floor(CW*DPR);
+  canvas.height=Math.floor(CH*DPR);
+}
+window.addEventListener('resize',resize);
+resize();
+
+function startAudio(){
+  try{
+    if(!audio) audio=new (window.AudioContext||window.webkitAudioContext)();
+    if(audio.state==='suspended') audio.resume();
+    startMusic();
+  }catch(e){}
+}
+function musicTone(freq,dur,when,volume=.022,type='triangle'){
+ try{
+  const o=audio.createOscillator(),g=audio.createGain();
+  o.type=type;o.frequency.setValueAtTime(freq,when);
+  g.gain.setValueAtTime(.0001,when);
+  g.gain.exponentialRampToValueAtTime(Math.max(.0002,volume),when+.006);
+  g.gain.exponentialRampToValueAtTime(.0001,when+dur);
+  o.connect(g);g.connect(audio.destination);o.start(when);o.stop(when+dur+.02);
+ }catch(e){}
+}
+function technoKick(when){
+ try{
+  const o=audio.createOscillator(),g=audio.createGain();
+  o.type='sine';o.frequency.setValueAtTime(125,when);o.frequency.exponentialRampToValueAtTime(45,when+.13);
+  g.gain.setValueAtTime(.08,when);g.gain.exponentialRampToValueAtTime(.001,when+.15);
+  o.connect(g);g.connect(audio.destination);o.start(when);o.stop(when+.16);
+ }catch(e){}
+}
+function technoHat(when,vol=.014){
+ try{
+  const o=audio.createOscillator(),g=audio.createGain();
+  o.type='square';o.frequency.value=6500;g.gain.setValueAtTime(vol,when);g.gain.exponentialRampToValueAtTime(.001,when+.045);
+  o.connect(g);g.connect(audio.destination);o.start(when);o.stop(when+.05);
+ }catch(e){}
+}
+function stopMusic(){if(musicTimer){clearTimeout(musicTimer);musicTimer=null}}
+function startMusic(level=1){
+ if(!audio)return;stopMusic();
+ const roots=[55,61.74,65.41,73.42,82.41,87.31,98,110,123.47,130.81];
+ const modes=[[1,1.125,1.5,1.78,2,1.78,1.5,1.125],[1,1.2,1.5,1.8,2.4,1.8,1.5,1.2],
+ [1,1.125,1.335,1.5,1.78,2,1.78,1.335],[1,1.25,1.5,2,1.5,1.25,1.125,.89]];
+ const root=roots[(level-1)%roots.length],mode=modes[(level-1)%modes.length];
+ const step=Math.max(.115,.18-(level-1)*.0006),bar=16*step;let seq=0;
+ function schedule(){
+  const now=audio.currentTime+.035;
+  for(let i=0;i<16;i++){
+   const t=now+i*step;
+   if(i%4===0)technoKick(t);
+   if(i%2===1)technoHat(t,.012+(level/50)*.006);
+   const note=root*mode[(i+seq)%mode.length];
+   musicTone(note,.09,t,.018+(level/50)*.006,i%4===0?'sawtooth':'square');
+   if(i%4===2)musicTone(root*mode[(i+2+seq)%mode.length]*2,.055,t,.009,'triangle');
+  }
+  seq=(seq+1)%mode.length;
+  musicTimer=setTimeout(schedule,bar*1000-18);
+ }
+ schedule();
+}
+function sound(freq,duration,type='sine'){
+  try{
+    startAudio();
+    const o=audio.createOscillator(),g=audio.createGain();
+    o.type=type;o.frequency.value=freq;g.gain.value=.035;
+    o.connect(g);g.connect(audio.destination);o.start();
+    g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+duration);
+    o.stop(audio.currentTime+duration);
+  }catch(e){}
+}
+
+
+
+
+let currentLevel=1,totalScore=0;
+function seeded(seed){let x=(seed*1664525+1013904223)>>>0;return()=>{x=(x*1664525+1013904223)>>>0;return x/4294967296}}
+const seasons=['Зима','Весна','Лето','Осень'],times=['День','Закат','Ночь','Рассвет'];
+const skyPalettes=[['#07101f','#172d50','#101827','#dbe8ff'],['#5d2740','#b85f61','#29364d','#ffd39a'],
+['#2f6f8f','#8fc2d5','#d9e7dc','#fff2a8'],['#2c5b39','#7aa15d','#d8d0a2','#fff0c0'],
+['#4a294f','#9b638d','#202844','#e9dcff'],['#182d4d','#466f9e','#b9c8d9','#f7f1d0'],
+['#6b3824','#b86b3f','#3c2c2a','#ffd58a'],['#10162e','#3b3d75','#12182a','#e9ecff']];
+function makeLevel(n){
+ const r=seeded(1000+n*7919),d=n/50;
+ const season=seasons[Math.floor(r()*4)],time=times[Math.floor(r()*4)],palette=skyPalettes[Math.floor(r()*skyPalettes.length)];
+ const floors=[];let x=0;
+ const fc=7+Math.floor(d*4);
+ for(let i=0;i<fc;i++){const w=(i===0?620:250+Math.floor(r()*(360-d*70)));floors.push([x,1080,w,90]);x+=w+70+Math.floor(r()*(100+d*90))}
+ floors.push([Math.max(x,2350),1080,250,90]);
+ const uppers=[],uc=6+Math.floor(d*5);
+ for(let i=0;i<uc;i++){const px=80+Math.floor(r()*2350),py=700+Math.floor(r()*190),pw=180+Math.floor(r()*(210-d*45));uppers.push([px,py,pw,55])}
+ uppers.sort((a,b)=>a[0]-b[0]);
+ const kp=uppers[uppers.length-1],key=[Math.min(2540,kp[0]+kp[2]-52),kp[1]-58];
+ function objs(count,gap){
+  const out=[];let tries=0;
+  while(out.length<count&&tries++<600){const f=floors[Math.floor(r()*floors.length)],ox=f[0]+25+r()*Math.max(20,f[2]-85);
+   if(out.every(v=>Math.abs(v.x-ox)>gap))out.push({x:ox,f})} return out;
+ }
+ const spikes=objs(2+Math.floor(d*10),75).map(o=>({x:o.x,y:1060,w:45+Math.floor(r()*55),h:20}));
+ for(let i=0;i<Math.floor(d*5);i++){const u=uppers[Math.floor(r()*uppers.length)];spikes.push({x:u[0]+20+r()*Math.max(20,u[2]-70),y:u[1]-20,w:35+Math.floor(r()*45),h:20})}
+ const lava=n>=3?objs(1+Math.floor(d*6),130).map(o=>({x:o.x,y:1060,w:70+Math.floor(r()*100),h:24})):[];
+ const acid=n>=6?objs(1+Math.floor(d*5),140).map(o=>({x:o.x,y:1060,w:70+Math.floor(r()*110),h:24})):[];
+ const rocks=objs(2+Math.floor(d*8),110).map(o=>({x:o.x,y:1010,w:55+Math.floor(r()*35),h:50+Math.floor(r()*20)}));
+ const enemies=[],ec=2+Math.floor(d*7);
+ for(let i=0;i<ec;i++){const up=n>=5&&r()<.25,pl=up?uppers[Math.floor(r()*uppers.length)]:floors[Math.floor(r()*floors.length)];
+  enemies.push({x:pl[0]+30+r()*Math.max(20,pl[2]-75),y:pl[1]-70,hp:2+Math.floor(n/18)})}
+// Clean starting corridor: every level begins with a safe stretch of
+ // floor before the first real obstacle. The button is placed later.
+ const START_SAFE_X=340;
+ const keepAfterStart=o=>o.x>=START_SAFE_X;
+ for(const arr of [spikes,lava,acid,rocks]) {
+   for(let i=arr.length-1;i>=0;i--) if(arr[i].x<START_SAFE_X) arr.splice(i,1);
+ }
+ for(let i=enemies.length-1;i>=0;i--) if(enemies[i].x<START_SAFE_X) enemies.splice(i,1);
+ // The floor button is deliberately placed on the first/lower floor.
+ // Opening button: always on the starting lower-floor platform, so it is
+ // visible immediately. Its exact position changes on every level.
+ const buttonFloor=floors[0];
+ const bw=72;
+ const minX=390, maxX=Math.max(minX+1,buttonFloor[2]-bw-90);
+ const buttonX=buttonFloor[0]+minX+(maxX-minX)*r();
+ const button={x:buttonX,y:1052,w:bw,h:28,pressed:false};
+
+ // Place two spike groups on both sides of the button, leaving a clear
+ // landing/standing area on the button itself.
+ const leftSpikeX=Math.max(buttonFloor[0]+START_SAFE_X+10,buttonX-65);
+ const rightSpikeX=Math.min(buttonFloor[0]+buttonFloor[2]-45,buttonX+bw+20);
+ spikes.push({x:leftSpikeX,y:1060,w:40,h:20});
+ spikes.push({x:rightSpikeX,y:1060,w:40,h:20});
+
+ // The iron grille stands ON the upper platform. Its bottom is exactly at
+ // the platform surface, so it is never hanging between floors.
+ const doorX=Math.max(kp[0]+12,Math.min(key[0]-27,kp[0]+kp[2]-66));
+ const door={x:doorX,y:kp[1]-76,w:54,h:76,open:false};
+
+ // The key is physically inside the grille until the floor button opens it.
+ key[0]=door.x+13;
+ key[1]=door.y+20;
+
+ return {number:n,difficulty:d,season,time,palette,platforms:floors.concat(uppers),key,keyPlatform:kp,
+ spikes,lava,acid,rocks,enemies,button,door,name:`Уровень ${n} — ${season}, ${time}`};
+}
+function createLevelVariant(){return makeLevel(currentLevel)}
+
+function createRandomLadders(){
+  const lower=game.platforms.filter(q=>q.y===1080);
+  const upper=game.platforms.filter(q=>q.y<1080);
+  const candidates=[];
+  for(const u of upper){
+    for(const b of lower){
+      const left=Math.max(u.x+18,b.x+18);
+      const right=Math.min(u.x+u.w-18,b.x+b.w-18);
+      if(right-left>=46){
+        candidates.push({x:left+(right-left-46)*Math.random(),top:u.y,bottom:b.y,w:46});
+        break;
+      }
+    }
+  }
+  const keyPlatform=upper.find(q=>game.key &&
+    game.key.x+game.key.w/2>=q.x &&
+    game.key.x+game.key.w/2<=q.x+q.w);
+  const keyCandidate=keyPlatform && candidates.find(l=>
+    l.top===keyPlatform.y &&
+    l.x+23>=keyPlatform.x && l.x+23<=keyPlatform.x+keyPlatform.w);
+  const rest=candidates.filter(l=>l!==keyCandidate);
+  for(let i=rest.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [rest[i],rest[j]]=[rest[j],rest[i]];
+  }
+  const chosen=[];
+  if(keyCandidate)chosen.push(keyCandidate);
+  for(const l of rest){
+    if(chosen.length>=4)break;
+    if(chosen.every(c=>Math.abs((c.x+23)-(l.x+23))>150))chosen.push(l);
+  }
+  return chosen;
+}
+
+function newGame(levelNumber=currentLevel){
+ startAudio();currentLevel=Math.max(1,Math.min(50,levelNumber));
+ const level=createLevelVariant();
+ game={running:true,paused:false,won:false,last:performance.now(),time:0,score:0,camera:0,particles:[],
+  level:level.number,season:level.season,timeOfDay:level.time,palette:level.palette,
+  p:{x:70,y:1004,w:42,h:76,vx:0,vy:0,on:false,ladder:null,hp:3,inv:0,attack:0,dir:1,anim:0,crouch:false,jumpHeld:false,jumpTime:0,jumpBoost:false},
+  platforms:level.platforms.map(a=>({x:a[0],y:a[1],w:a[2],h:a[3]})),ladders:[],
+  spikes:level.spikes,lava:level.lava,acid:level.acid,rocks:level.rocks,
+  enemies:level.enemies.map(e=>makeEnemy(e.x,e.y,e.hp)),
+  key:{x:level.key[0],y:level.key[1],w:28,h:34,taken:false},door:level.door,button:level.button};
+ game.ladders=createRandomLadders();startMusic(currentLevel);
+ document.getElementById('levelNo').textContent=currentLevel;showStatus(level.name);
+ document.getElementById('menu').style.display='none';document.getElementById('hud').style.display='flex';
+ document.getElementById('controls').style.display='flex';document.getElementById('pause').textContent='Ⅱ';updateHud();
+ sound(523,.12);setTimeout(()=>sound(659,.12),110);
+}
+
+function makeEnemy(x,y,hp){
+ return {x,y,w:44,h:70,hp,alive:true,vx:0,vy:0,on:false,dir:-1,jumpCooldown:.5};
+}
+
+function resetGame(){
+  currentLevel=1;totalScore=0;newGame(1);
+}
+
+function rect(a,b){
+ return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
+}
+
+function ground(o,oldY){
+ o.on=false;
+ if(o.vy<0)return;
+ for(const q of game.platforms){
+   if(o.x+o.w>q.x+5 && o.x<q.x+q.w-5 &&
+      oldY+o.h<=q.y+2 && o.y+o.h>=q.y){
+     o.y=q.y-o.h;o.vy=0;o.on=true;return;
+   }
+ }
+}
+
+function nearLadder(){
+ const p=game.p,cx=p.x+p.w/2;
+ for(const l of game.ladders){
+   if(cx>l.x-12&&cx<l.x+l.w+12&&
+      p.y+p.h>l.top-35&&p.y<l.bottom+25)return l;
+ }
+ return null;
+}
+
+function jump(){
+ if(!game||!game.running||game.paused)return;
+ const p=game.p;
+ if(p.ladder){
+   p.ladder=null;
+   p.vy=-9;
+   return;
+ }
+ if(p.on){
+   p.vy=-790;
+   p.on=false;
+   p.jumpHeld=true;
+   p.jumpTime=0;
+   p.jumpBoost=true;
+   particles(p.x+20,p.y+72,'#e2c181',10);
+   sound(440,.08,'square');
+ }
+}
+function climb(){
+ if(!game||!game.running||game.paused)return;
+ const p=game.p;
+ let l=p.ladder||nearLadder();
+ if(!l)return;
+ p.ladder=l;
+ p.x=l.x+(l.w-p.w)/2;
+ p.vx=0;p.vy=0;
+ // If at the bottom, move upward. If at the top, also allow a short
+ // upward push so the knight steps onto the upper floor.
+ if(p.y>=l.bottom-p.h-8){
+   p.y-=Math.min(120, l.bottom-l.top);
+ }else{
+   p.y=Math.max(l.top-p.h,p.y-110);
+ }
+ if(p.y<=l.top-p.h){
+   p.y=l.top-p.h;
+   p.ladder=null;
+   p.on=true;
+ }
+}
+function descend(){
+ if(!game||!game.running||game.paused)return;
+ const p=game.p,l=nearLadder()||p.ladder;
+ if(!l)return;
+ p.ladder=l;p.x=l.x+(l.w-p.w)/2;p.vx=0;p.vy=0;
+ p.y=Math.min(l.bottom-p.h,p.y+110);
+ if(p.y>=l.bottom-p.h){
+   p.y=l.bottom-p.h;p.ladder=null;p.on=true;
+ }
+}
+function sword(){
+ if(!game||!game.running||game.paused||game.p.attack>0)return;
+ game.p.attack=.35;
+ const h={
+   x:game.p.x+(game.p.dir>0?20:-65),
+   y:game.p.y+12,w:68,h:50
+ };
+ let hitSomeone=false;
+ for(const e of game.enemies){
+   if(e.alive&&rect(h,e)){
+     e.hp--;e.vx=game.p.dir*7;game.score+=100;hitSomeone=true;
+     particles(e.x+20,e.y+25,'#ffd66a',14);
+     if(e.hp<=0){e.alive=false;game.score+=250;particles(e.x+20,e.y+30,'#eee',28);}
+   }
+ }
+ sound(hitSomeone?350:180,.08,'triangle');
+}
+
+function damage(){
+ if(game.p.inv>0)return;
+ game.p.hp--;game.p.inv=1.1;
+ particles(game.p.x+20,game.p.y+35,'#ef3d4f',18);
+ sound(90,.15,'sawtooth');
+ if(game.p.hp<=0){
+   game.running=false;
+   showStatus('💀 Рыцарь пал');
+   setTimeout(()=>showMenu('💀 РЫЦАРЬ ПАЛ','Попробуй пройти замок ещё раз.'),350);
+ }
+ updateHud();
+}
+
+
+
+function update(dt){
+ if(!game||!game.running||game.paused)return;game.time+=dt;const p=game.p;
+ if(p.inv>0)p.inv-=dt;if(p.attack>0)p.attack-=dt;
+ if(p.ladder){
+  const l=p.ladder;p.vx=0;p.vy=0;if(input.up)p.y-=155*dt;if(input.down)p.y+=155*dt;p.x=l.x+(l.w-p.w)/2;
+  const topY=l.top-p.h,bottomY=l.bottom-p.h;
+  if(p.y<=topY){p.y=topY;if(!input.up)p.ladder=null}if(p.y>=bottomY){p.y=bottomY;if(!input.down)p.ladder=null}
+ }else{
+  const dx=(input.right?1:0)-(input.left?1:0);p.crouch=!!input.crouch&&p.on;
+  if(p.on){const speed=p.crouch?2:4.5,target=dx*speed;p.vx+=(target-p.vx)*Math.min(1,dt*(p.crouch?16:11));if(!dx)p.vx*=Math.pow(.02,dt)}
+  else{const target=dx*4.7;p.vx+=(target-p.vx)*Math.min(1,dt*8);if(!dx)p.vx*=Math.pow(.002,dt)}
+  if(dx)p.dir=dx;const oldX=p.x;p.x+=p.vx;
+  // Rocks are solid natural barriers: the knight can jump over them,
+  // but cannot simply walk through them.
+  for(const rock of game.rocks){
+    if(rect(p,rock)){p.x=oldX;p.vx=0;break}
+  }
+  if(!game.door.open&&rect(p,game.door)){p.x=oldX;p.vx=0}
+  if(input.up&&p.jumpHeld&&p.jumpTime<.20&&p.vy<0)p.jumpTime+=dt;else p.jumpHeld=false;
+  const oldY=p.y;p.vy+=1200*dt;p.y+=p.vy*dt;ground(p,oldY);
+  if(p.on){p.vy=0;p.jumpHeld=false;p.jumpTime=0}
+ }
+ p.x=Math.max(0,Math.min(2550,p.x));
+ if(!game.door.open&&p.on&&rect(p,game.button)){
+  game.button.pressed=true;game.door.open=true;game.score+=150;
+  particles(game.button.x+30,game.button.y,'#d7d7d7',18);
+  sound(240,.12,'square');setTimeout(()=>sound(420,.16),90);
+  showStatus('🔓 Кнопка нажата — решётка открыта');
+}
+ game.button.pressed=game.door.open||rect(p,game.button);
+ for(const s of game.spikes)if(rect(p,s))damage();
+ for(const s of game.lava)if(rect(p,s))damage();
+ for(const s of game.acid)if(rect(p,s))damage();
+ if(p.y>1300){damage();p.x=Math.max(40,p.x-180);p.y=1004;p.vy=0;p.ladder=null}
+ if(game.door.open&&!game.key.taken&&rect(p,game.key)){game.key.taken=true;game.score+=500;particles(game.key.x,game.key.y,'#ffd34c',36);sound(760,.12);setTimeout(()=>sound(980,.15),100);showStatus('🔑 Ключ найден')}
+ for(const e of game.enemies)if(e.alive){
+  const old=e.y;if(e.jumpCooldown>0)e.jumpCooldown-=dt;e.vy+=1200*dt;e.y+=e.vy*dt;e.on=false;
+  for(const q of game.platforms)if(e.x+e.w>q.x+5&&e.x<q.x+q.w-5&&old+e.h<=q.y+2&&e.y+e.h>=q.y&&e.vy>=0){e.y=q.y-e.h;e.vy=0;e.on=true}
+  if(Math.abs(p.x-e.x)<300)e.dir=p.x>e.x?1:-1;else e.vx=0;
+  const nextX=e.x+e.dir*1.15;let blocked=false;
+  for(const rock of game.rocks)if(rect({x:nextX,y:e.y,w:e.w,h:e.h},rock)){blocked=true;break}
+  if(blocked)e.dir*=-1;
+  else{
+   const obstacleAhead=[...game.spikes,...game.lava,...game.acid].some(o=>o.x+o.w>e.x+e.w&&o.x+o.w<e.x+e.w+85&&Math.abs(o.y-(e.y+e.h))<45);
+   if(currentLevel>=3&&e.on&&e.jumpCooldown<=0&&obstacleAhead){e.vy=-790;e.on=false;e.jumpCooldown=1.4}
+   e.vx=e.dir*1.15;e.x+=e.vx;
+  }
+  if(rect(p,e)&&p.attack<=0)damage();
+ }
+ if(rect(p,game.door)&&game.key.taken){
+  game.door.open=true;totalScore+=game.score+1000;game.running=false;game.won=true;
+  particles(game.door.x+25,game.door.y+35,'#ffe36a',50);sound(523,.14);setTimeout(()=>sound(784,.16),120);
+  if(currentLevel<50){showStatus(`🏆 Уровень ${currentLevel} пройден!`);setTimeout(()=>newGame(currentLevel+1),900)}
+  else{showStatus('🏆 ВСЕ 50 УРОВНЕЙ ПРОЙДЕНЫ!');setTimeout(()=>showMenu('🏆 ПОБЕДА!','Ты прошёл все 50 уровней замка.'),900)}
+ }
+ game.camera+=(p.x-300-game.camera)*Math.min(1,dt*5);game.camera=Math.max(0,Math.min(1640,game.camera));
+ game.particles.forEach(q=>{q.x+=q.vx*dt*60;q.y+=q.vy*dt*60;q.vy+=.15;q.life-=dt});
+ game.particles=game.particles.filter(q=>q.life>0);updateHud();
+}
+
+function particles(x,y,c,n){
+ if(!game)return;
+ for(let i=0;i<n;i++)game.particles.push({
+   x,y,c,vx:(Math.random()-.5)*5,vy:(Math.random()-1)*5,life:.45+Math.random()*.7
+ });
+}
+
+function draw(){
+ ctx.setTransform(DPR,0,0,DPR,0,0);
+ ctx.clearRect(0,0,CW,CH);
+
+ // Letterbox вместо растягивания.
+ const ratio=16/9;
+ let w=CW,h=CW/ratio;
+ if(h>CH){h=CH;w=CH*ratio}
+ const ox=(CW-w)/2,oy=(CH-h)/2;
+ ctx.save();ctx.translate(ox,oy);ctx.scale(w/960,h/540);
+
+ drawBackground();
+
+ if(game){
+   ctx.save();
+   // Fixed vertical framing: the visible game area includes the upper
+    // platforms and the first floor, while controls remain completely separate.
+    ctx.translate(-game.camera,-600);
+   drawWorld();
+   ctx.restore();
+ }
+ ctx.restore();
+}
+
+function drawBackground(){
+ const pal=game?.palette||skyPalettes[0],r=seeded((game?.level||1)*3571+17);
+ let g=ctx.createLinearGradient(0,0,0,540);g.addColorStop(0,pal[0]);g.addColorStop(.55,pal[1]);g.addColorStop(1,pal[2]);
+ ctx.fillStyle=g;ctx.fillRect(0,0,960,540);
+ const night=game?.timeOfDay==='Ночь',dawn=game?.timeOfDay==='Рассвет',season=game?.season||'Лето';
+ ctx.fillStyle=pal[3];ctx.beginPath();ctx.arc(770,78,night?30:38,0,7);ctx.fill();
+ const gap=90+Math.floor(r()*70),base=215+Math.floor(r()*35);ctx.fillStyle=night?'#0a1220':'#172238';
+ for(let x=-60;x<1080;x+=gap){const w=60+Math.floor(r()*70),h=120+Math.floor(r()*150);ctx.fillRect(x,base+(260-h),w,h);if(r()>.35)ctx.fillRect(x+w*.25,base-h-35,w*.5,35);for(let k=0;k<3;k++)ctx.fillRect(x+8+k*18,base-h+18,10,18)}
+ if(season==='Зима'){ctx.fillStyle='#fff';for(let i=0;i<45;i++)ctx.fillRect(r()*960,r()*360,2,5)}
+ if(season==='Весна'){ctx.fillStyle='#8acb72';for(let i=0;i<22;i++)ctx.fillRect(r()*960,400+r()*80,3,22)}
+ if(season==='Лето'){ctx.fillStyle='#e7c86b55';for(let i=0;i<18;i++){ctx.beginPath();ctx.arc(r()*960,360+r()*110,3+r()*4,0,7);ctx.fill()}}
+ if(season==='Осень'){ctx.fillStyle='#d38a4c88';for(let i=0;i<28;i++){ctx.save();ctx.translate(r()*960,350+r()*140);ctx.rotate(r()*3);ctx.fillRect(0,0,5,12);ctx.restore()}}
+ if(dawn){ctx.fillStyle='#ffb07a33';ctx.fillRect(0,120,960,180)}
+ if(night){ctx.fillStyle='#ffffff99';for(let i=0;i<35;i++)ctx.fillRect(r()*960,25+r()*170,2,2)}
+ let fog=ctx.createLinearGradient(0,300,0,540);fog.addColorStop(0,'#8aa4bd00');fog.addColorStop(1,'#8aa4bd28');ctx.fillStyle=fog;ctx.fillRect(0,300,960,240);
+}
+function drawWorld(){
+ for(const q of game.platforms)drawPlatform(q);for(const l of game.ladders)drawLadder(l);
+ for(const s of game.lava)drawLava(s);for(const s of game.acid)drawAcid(s);for(const s of game.spikes)drawSpikes(s);
+ for(const r of game.rocks)drawRock(r);
+ drawDoor(game.door);
+ drawButton(game.button);
+ if(!game.key.taken)drawKey(game.key.x,game.key.y);
+ for(const e of game.enemies)if(e.alive)drawEnemy(e);
+ drawKnight(game.p);for(const q of game.particles){ctx.globalAlpha=Math.max(0,q.life);ctx.fillStyle=q.c;ctx.fillRect(q.x,q.y,6,6)}ctx.globalAlpha=1;
+}
+
+function drawPlatform(q){
+  let base='#484a50',edge='#8b8980',a='#69696d',b='#55565d',line='#34353b';
+  if(game?.theme==='day'){base='#67645d';edge='#aaa18d';a='#858075';b='#716c62';line='#4d4a44'}
+  if(game?.theme==='dawn'){base='#51454d';edge='#9b8178';a='#6d5c61';b='#5c4d54';line='#382f35'}
+  if(game?.theme==='moon'){base='#39405b';edge='#77809d';a='#525b78';b='#454d69';line='#252b42'}
+  ctx.fillStyle=base;ctx.fillRect(q.x,q.y,q.w,q.h);
+  ctx.fillStyle=edge;ctx.fillRect(q.x,q.y,q.w,7);
+  for(let x=q.x;x<q.x+q.w;x+=32){
+    ctx.fillStyle=(x%64?a:b);ctx.fillRect(x+2,q.y+10,27,17);
+    ctx.fillStyle=line;ctx.fillRect(x+2,q.y+31,30,3);
+  }
+}
+
+
+function drawLadder(l){
+ ctx.strokeStyle='#9a6b39';ctx.lineWidth=9;
+ ctx.beginPath();ctx.moveTo(l.x,l.top);ctx.lineTo(l.x,l.bottom);
+ ctx.moveTo(l.x+l.w,l.top);ctx.lineTo(l.x+l.w,l.bottom);ctx.stroke();
+ ctx.lineWidth=5;
+ for(let y=l.top+8;y<l.bottom;y+=20){
+   ctx.beginPath();ctx.moveTo(l.x,y);ctx.lineTo(l.x+l.w,y);ctx.stroke();
+ }
+}
+
+function drawLava(s){ctx.fillStyle='#c63d16';ctx.fillRect(s.x,s.y,s.w,s.h);ctx.fillStyle='#ffb52e';for(let x=s.x;x<s.x+s.w;x+=18){ctx.beginPath();ctx.arc(x+8,s.y+8+Math.sin(performance.now()/180+x)*3,7,0,7);ctx.fill()}}
+function drawAcid(s){ctx.fillStyle='#5dcc28';ctx.fillRect(s.x,s.y,s.w,s.h);ctx.fillStyle='#b7ff55';for(let x=s.x;x<s.x+s.w;x+=20){ctx.beginPath();ctx.arc(x+8,s.y+7+Math.sin(performance.now()/150+x)*3,5,0,7);ctx.fill()}}
+function drawRock(r){ctx.fillStyle='#555861';ctx.beginPath();ctx.moveTo(r.x,r.y+r.h);ctx.lineTo(r.x+5,r.y+18);ctx.lineTo(r.x+r.w*.32,r.y);ctx.lineTo(r.x+r.w*.72,r.y+5);ctx.lineTo(r.x+r.w,r.y+22);ctx.lineTo(r.x+r.w-4,r.y+r.h);ctx.closePath();ctx.fill();ctx.strokeStyle='#85898d';ctx.lineWidth=3;ctx.stroke()}
+function drawButton(b){
+  // Bright floor pressure plate, deliberately drawn last among floor objects.
+  ctx.save();
+  ctx.shadowColor=b.pressed?'#65ff7a':'#ff3030';ctx.shadowBlur=14;
+  ctx.fillStyle=b.pressed?'#43d866':'#f02f2f';
+  ctx.fillRect(b.x,b.y,b.w,b.h);
+  ctx.shadowBlur=0;
+  ctx.fillStyle='#fff';ctx.fillRect(b.x+5,b.y+4,b.w-10,7);
+  ctx.strokeStyle='#fff';ctx.lineWidth=3;ctx.strokeRect(b.x,b.y,b.w,b.h);
+  ctx.fillStyle='#fff';ctx.font='bold 13px Arial';ctx.fillText('OPEN',b.x+12,b.y+22);
+  ctx.restore();
+}
+
+function drawSpikes(s){
+ ctx.fillStyle='#e5e3dc';
+ for(let x=s.x;x<s.x+s.w;x+=16){
+   ctx.beginPath();ctx.moveTo(x,s.y+20);ctx.lineTo(x+8,s.y);ctx.lineTo(x+16,s.y+20);ctx.fill();
+ }
+}
+
+function drawKey(x,y){
+ ctx.strokeStyle='#ffd34b';ctx.lineWidth=7;
+ ctx.beginPath();ctx.arc(x+9,y+9,8,0,7);
+ ctx.moveTo(x+16,y+15);ctx.lineTo(x+30,y+30);
+ ctx.moveTo(x+24,y+23);ctx.lineTo(x+29,y+18);ctx.stroke();
+}
+
+function drawDoor(d){
+  // Iron grille sits directly on the upper floor.
+  if(d.open){
+    ctx.fillStyle='#4b555b88';ctx.fillRect(d.x,d.y,d.w,d.h);
+    ctx.strokeStyle='#9ee6a4';ctx.lineWidth=4;ctx.strokeRect(d.x+3,d.y+3,d.w-6,d.h-6);
+    return;
+  }
+  ctx.fillStyle='#252b30';ctx.fillRect(d.x,d.y,d.w,d.h);
+  ctx.strokeStyle='#b7c0c5';ctx.lineWidth=4;ctx.strokeRect(d.x+2,d.y+2,d.w-4,d.h-4);
+  ctx.strokeStyle='#66727a';ctx.lineWidth=5;
+  for(let x=d.x+9;x<d.x+d.w;x+=12){
+    ctx.beginPath();ctx.moveTo(x,d.y+4);ctx.lineTo(x,d.y+d.h-4);ctx.stroke();
+  }
+  ctx.strokeStyle='#aeb7bc';ctx.lineWidth=3;
+  ctx.beginPath();ctx.moveTo(d.x+4,d.y+18);ctx.lineTo(d.x+d.w-4,d.y+18);ctx.stroke();
+  ctx.fillStyle='#e1c45a';ctx.font='18px serif';ctx.fillText('🔒',d.x+16,d.y+48);
+}
+
+function drawEnemy(e){
+ ctx.save();ctx.translate(e.x,e.y);
+ ctx.fillStyle='#dedbd0';ctx.beginPath();ctx.arc(21,14,15,0,7);ctx.fill();
+ ctx.fillStyle='#292a2f';ctx.fillRect(7,10,28,11);
+ ctx.fillStyle='#111';ctx.fillRect(12,14,4,4);ctx.fillRect(24,14,4,4);
+ ctx.strokeStyle='#ddd';ctx.lineWidth=5;
+ ctx.beginPath();ctx.moveTo(11,32);ctx.lineTo(4,66);ctx.moveTo(31,32);ctx.lineTo(39,66);ctx.stroke();
+ ctx.strokeStyle='#ddd';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(34,31);ctx.lineTo(53,9);ctx.stroke();
+ ctx.restore();
+}
+
+function drawKnight(a){
+ if(a.inv>0&&Math.floor(a.inv*14)%2===0)return;
+ const crouched=a.crouch&&a.on&&!a.ladder;
+ ctx.save();ctx.translate(a.x,a.y);if(a.dir<0)ctx.scale(-1,1);
+ const run=a.on&&!a.ladder&&!crouched?Math.sin(performance.now()/90)*5:0;
+ if(crouched)ctx.translate(0,18);
+
+ // cape
+ ctx.fillStyle='#8e2530';ctx.beginPath();
+ ctx.moveTo(3,18);ctx.lineTo(-27,58+run);ctx.lineTo(11,47);ctx.lineTo(17,15);ctx.fill();
+
+ // legs
+ ctx.fillStyle='#c4c9cb';ctx.fillRect(6,38+run,11,25);ctx.fillRect(22,38-run,11,25);
+ ctx.fillStyle='#252b32';ctx.fillRect(2,61+run,18,6);ctx.fillRect(21,61-run,18,6);
+
+ // armor
+ ctx.fillStyle='#c9ced0';ctx.fillRect(6,16,29,29);
+ ctx.fillStyle='#707881';ctx.fillRect(11,21,20,19);
+
+ // shield
+ ctx.fillStyle='#61748b';ctx.beginPath();ctx.arc(7,31,12,0,7);ctx.fill();
+ ctx.strokeStyle='#d6ae51';ctx.lineWidth=2;ctx.stroke();
+
+ // helmet
+ ctx.fillStyle='#d5d8da';ctx.beginPath();ctx.arc(20,13,16,Math.PI,0);ctx.fill();
+ ctx.fillRect(4,11,32,11);ctx.fillStyle='#2d3138';ctx.fillRect(10,14,25,6);
+
+ // sword
+ ctx.strokeStyle='#eef1f0';ctx.lineWidth=6;ctx.beginPath();
+ ctx.moveTo(32,31);ctx.lineTo(a.attack>0?60:49,a.attack>0?4:13);ctx.stroke();
+ ctx.strokeStyle='#b98c45';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(32,27);ctx.lineTo(43,37);ctx.stroke();
+
+ if(a.attack>0){
+   ctx.strokeStyle='#fff1b8';ctx.lineWidth=4;ctx.beginPath();
+   ctx.arc(32,23,38,-1.05,.55);ctx.stroke();
+ }
+ ctx.restore();
+}
+
+function updateHud(){
+ if(!game)return;
+ document.getElementById('hp').textContent='♥ '.repeat(game.p.hp).trim();
+ document.getElementById('key').textContent=(game.key.taken?'1':'0')+'/1';
+ document.getElementById('score').textContent=totalScore+game.score;
+ const s=Math.floor(game.time);
+ document.getElementById('time').textContent=
+   String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+}
+
+function showStatus(t){
+ const el=document.getElementById('status');el.textContent=t;el.style.display='block';
+ setTimeout(()=>el.style.display='none',900);
+}
+
+function showMenu(title,sub){
+ document.getElementById('panelText');
+ const card=document.querySelector('.card');
+ card.innerHTML=title+'<small>'+sub+'</small><button id="start" type="button">⚔ НАЧАТЬ ИГРУ</button>';
+ document.getElementById('menu').style.display='flex';
+ // Rebind the newly-created button.
+ document.getElementById('start').addEventListener('click',function(e){
+   e.preventDefault();e.stopPropagation();newGame();
+ });
+ document.getElementById('hud').style.display='none';
+ document.getElementById('controls').style.display='none';
+}
+
+// Initial button binding — delegated, so iPhone Safari handles it reliably.
+document.getElementById('start').addEventListener('click',function(e){
+ e.preventDefault();e.stopPropagation();newGame();
+});
+
+function hold(id,prop){
+ const b=document.getElementById(id);
+ b.addEventListener('pointerdown',e=>{e.preventDefault();try{b.setPointerCapture(e.pointerId)}catch(_){}input[prop]=true});
+ ['pointerup','pointercancel','pointerleave'].forEach(ev=>{
+   b.addEventListener(ev,e=>{e.preventDefault();input[prop]=false});
+ });
+}
+hold('left','left');hold('right','right');hold('crouch','crouch');
+
+const jumpBtn=document.getElementById('up');
+jumpBtn.addEventListener('pointerdown',e=>{
+ e.preventDefault();
+ try{jumpBtn.setPointerCapture(e.pointerId)}catch(_){}
+ input.up=true;
+ jump();
+});
+['pointerup','pointercancel','pointerleave'].forEach(ev=>{
+ jumpBtn.addEventListener(ev,e=>{
+   e.preventDefault();
+   input.up=false;
+ });
+});
+document.getElementById('climb').addEventListener('pointerdown',e=>{
+ e.preventDefault();
+ try{document.getElementById('climb').setPointerCapture(e.pointerId)}catch(_){}
+ input.up=true;
+ climb();
+});
+['pointerup','pointercancel','pointerleave'].forEach(ev=>{
+ document.getElementById('climb').addEventListener(ev,e=>{
+   e.preventDefault(); input.up=false;
+ });
+});
+document.getElementById('climb').addEventListener('contextmenu',e=>e.preventDefault());
+document.getElementById('crouch').addEventListener('pointerdown',e=>{
+ e.preventDefault();
+ const l=nearLadder();
+ if(l||game?.p?.ladder) descend();
+ else input.crouch=true;
+});
+['pointerup','pointercancel','pointerleave'].forEach(ev=>{
+ document.getElementById('crouch').addEventListener(ev,e=>{
+   e.preventDefault(); input.crouch=false;
+ });
+});
+document.getElementById('attack').addEventListener('pointerdown',e=>{
+ e.preventDefault(); sword();
+});
+
+document.getElementById('pause').addEventListener('click',function(){
+ if(!game||!game.running)return;
+ game.paused=!game.paused;
+ this.textContent=game.paused?'▶':'Ⅱ';
+});
+
+document.addEventListener('keydown',e=>{
+ if(e.key==='ArrowLeft'||e.key==='a')input.left=true;
+ if(e.key==='ArrowRight'||e.key==='d')input.right=true;
+ if(e.key==='ArrowDown'||e.key==='s'){input.crouch=true;input.down=true}
+ if(e.key==='ArrowUp'||e.key==='w'){
+   input.up=true;
+   if(!e.repeat)jump();
+ }
+ if(e.key==='e'||e.key==='E'){if(!e.repeat)climb();}
+ if(e.key==='q'||e.key==='Q'){if(!e.repeat)descend();}
+ if(e.key==='f'||e.key==='F')sword();
+ if(e.key===' ') {e.preventDefault();if(!e.repeat)jump();}
+ if(e.key==='p'||e.key==='P')document.getElementById('pause').click();
+});
+document.addEventListener('keyup',e=>{
+ if(e.key==='ArrowLeft'||e.key==='a')input.left=false;
+ if(e.key==='ArrowRight'||e.key==='d')input.right=false;
+ if(e.key==='ArrowDown'||e.key==='s'){input.crouch=false;input.down=false;}
+ if(e.key==='ArrowUp'||e.key==='w')input.up=false;
+});
+
+function loop(t){
+ const dt=Math.min(.033,(t-(game?.last||t))/1000);
+ if(game)game.last=t;
+ update(dt);draw();
+ requestAnimationFrame(loop);
+}
+
+showMenu('🏰 ЗАМОК ЛУНЫ','50 уровней: открывай железные двери, избегай ловушек и доберись до ключа.');
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
